@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: jewel
+      POSTGRES_PASSWORD: jewel
+      POSTGRES_DB: jewel_erp
+    ports:
+      - "5433:5432"
+    volumes:
+      - jewel_pg:/var/lib/postgresql/data
+volumes:
+  jewel_pg:

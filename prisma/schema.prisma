@@ -1,0 +1,1167 @@
+// Jewellery Wholesale ERP — database schema
+//
+// Principles
+//  * Weights DECIMAL(14,3|4), fine DECIMAL(14,4), money DECIMAL(16,2), rates DECIMAL(16,4).
+//  * Physical weight, fine metal, stone value and money are ALWAYS separate columns / ledgers.
+//  * Financial documents are never hard-deleted: status ACTIVE/CANCELLED/VOID + reversal entries.
+//  * Ledgers are append-only. Cancellation inserts reversing rows (reversesId) — originals untouched.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────── Enums ─────────────────────────
+enum DocStatus {
+  DRAFT
+  ACTIVE
+  CANCELLED
+  VOID
+}
+
+enum BillingMode {
+  MONEY // gold billed in rupees
+  METAL // fine gold on metal ledger + charges in money
+}
+
+enum MakingType {
+  PER_GRAM
+  PER_PIECE
+  PERCENT
+  FIXED
+  CUSTOM
+}
+
+enum StoneUnit {
+  CARAT
+  GRAM
+  PIECE
+  CENT
+  CUSTOM
+}
+
+enum StoneRateMethod {
+  PER_CARAT
+  PER_GRAM
+  PER_PIECE
+  FIXED
+  INCLUDED
+}
+
+enum ItemStatus {
+  AVAILABLE
+  SOLD
+  ON_APPROVAL
+  RESERVED
+  IN_TRANSIT
+  RETURNED
+  DAMAGED
+  ADJUSTED
+}
+
+enum PartyStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+}
+
+enum MetalTxnType {
+  OPENING
+  SALE
+  SALE_RETURN
+  GOLD_RECEIPT
+  RATE_FIXING
+  ADJUSTMENT
+  CREDIT_NOTE
+  PURCHASE
+  PURCHASE_RETURN
+  GOLD_PAYMENT
+  EXCHANGE
+  REVERSAL
+}
+
+enum MoneyTxnType {
+  OPENING
+  SALE
+  SALE_RETURN
+  CASH_RECEIPT
+  BANK_RECEIPT
+  RATE_FIXING
+  ADJUSTMENT
+  CREDIT_NOTE
+  PURCHASE
+  PURCHASE_RETURN
+  SUPPLIER_PAYMENT
+  EXCHANGE
+  REVERSAL
+}
+
+enum StockTxnType {
+  OPENING_STOCK
+  PURCHASE_IN
+  SALE_OUT
+  SALE_RETURN_IN
+  PURCHASE_RETURN_OUT
+  APPROVAL_OUT
+  APPROVAL_RETURN
+  ADJUSTMENT
+  TRANSFER_OUT
+  TRANSFER_IN
+  EXCHANGE_IN
+  EXCHANGE_OUT
+  REVERSAL
+}
+
+enum PaymentMode {
+  CASH
+  UPI
+  BANK_TRANSFER
+  NEFT
+  RTGS
+  CHEQUE
+  CARD
+  OTHER
+}
+
+enum ApprovalStatus {
+  OPEN
+  PARTIAL
+  CLOSED
+  CANCELLED
+}
+
+enum TransferStatus {
+  DRAFT
+  IN_TRANSIT
+  RECEIVED
+  CANCELLED
+}
+
+enum AdjustmentReason {
+  WEIGHT_DIFFERENCE
+  DAMAGED
+  MISSING
+  MANUAL_CORRECTION
+  OPENING_ADJUSTMENT
+  MELTING
+  RECLASSIFICATION
+  OTHER
+}
+
+enum DocType {
+  SALE
+  PURCHASE
+  GOLD_RECEIPT
+  CASH_RECEIPT
+  APPROVAL
+  SALE_RETURN
+  PURCHASE_RETURN
+  RATE_FIXING
+  SUPPLIER_PAYMENT
+  ADJUSTMENT
+  TRANSFER
+  EXCHANGE
+}
+
+// ───────────────────────── Auth (Better Auth) & access ─────────────────────────
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  isActive      Boolean   @default(true)
+  roleId        String?
+  role          Role?     @relation(fields: [roleId], references: [id])
+  /// Per-user extra permission grants/denials on top of the role (custom combinations)
+  extraPermissions String[] @default([])
+  deniedPermissions String[] @default([])
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  isSystem    Boolean  @default(false)
+  /// e.g. ["sale.create","cost.view","profit.view"] — see lib/auth/permissions.ts
+  permissions String[] @default([])
+  users       User[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  at        DateTime @default(now())
+  userId    String?
+  userName  String?
+  module    String
+  action    String // BILL_EDITED, BILL_CANCELLED, WEIGHT_CHANGED, ...
+  recordType String
+  recordId  String
+  recordRef String? // human reference e.g. SALE/26-27/0001
+  oldValue  Json?
+  newValue  Json?
+  reason    String?
+  ip        String?
+  device    String?
+
+  @@index([module, at])
+  @@index([recordType, recordId])
+  @@index([userId, at])
+  @@index([at])
+}
+
+// ───────────────────────── Business settings ─────────────────────────
+model Business {
+  id            String  @id @default("main")
+  name          String
+  legalName     String?
+  logoUrl       String?
+  gstin         String?
+  pan           String?
+  address       String?
+  city          String?
+  state         String  @default("Maharashtra")
+  stateCode     String  @default("27")
+  pincode       String?
+  phone         String?
+  email         String?
+  website       String?
+  bankName      String?
+  accountNumber String?
+  ifsc          String?
+  upi           String?
+  terms         String?
+  signatureUrl  String?
+
+  // rounding & conversion configuration (spec §10, §65)
+  weightDecimals  Int     @default(3)
+  gramsPerCarat   Decimal @default(0.2) @db.Decimal(10, 6)
+  caratsPerCent   Decimal @default(0.01) @db.Decimal(10, 6)
+  roundOffInvoice Boolean @default(false)
+  taxMetalValueInMetalMode Boolean @default(false)
+  stoneDeductsFromGross Boolean @default(true)
+  updatedAt       DateTime @updatedAt
+}
+
+model FinancialYear {
+  id        String   @id @default(cuid())
+  label     String   @unique // "26-27"
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  isCurrent Boolean  @default(false)
+  isLocked  Boolean  @default(false)
+}
+
+/// Concurrency-safe numbering: row-locked with SELECT ... FOR UPDATE inside the posting transaction.
+model NumberSequence {
+  id       String  @id @default(cuid())
+  docType  DocType
+  fyLabel  String
+  prefix   String
+  padding  Int     @default(4)
+  nextNo   Int     @default(1)
+
+  @@unique([docType, fyLabel])
+}
+
+model GstRate {
+  id        String  @id @default(cuid())
+  name      String
+  hsn       String
+  /// total GST % — split to CGST/SGST or IGST at invoice time
+  rate      Decimal @db.Decimal(6, 3)
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
+}
+
+model Metal {
+  id       String  @id @default(cuid())
+  name     String  @unique // Gold, Silver, Platinum
+  symbol   String?
+  isActive Boolean @default(true)
+  purities Purity[]
+  rates    MetalRate[]
+  products Product[]
+}
+
+model Purity {
+  id          String  @id @default(cuid())
+  metalId     String
+  metal       Metal   @relation(fields: [metalId], references: [id])
+  name        String // "22K", "92", "Custom 76"
+  karat       Decimal? @db.Decimal(5, 2)
+  /// touch % — 91.6, 75, 99.9 …
+  touch       Decimal @db.Decimal(7, 3)
+  description String?
+  isActive    Boolean @default(true)
+  products    Product[]
+  rates       MetalRate[]
+
+  @@unique([metalId, name])
+}
+
+model MetalRate {
+  id        String   @id @default(cuid())
+  metalId   String
+  metal     Metal    @relation(fields: [metalId], references: [id])
+  purityId  String?
+  purity    Purity?  @relation(fields: [purityId], references: [id])
+  date      DateTime @db.Date
+  ratePerGram Decimal @db.Decimal(16, 4)
+  source    String?
+  notes     String?
+  createdById String?
+  createdAt DateTime @default(now())
+
+  @@index([metalId, purityId, date])
+}
+
+model Category {
+  id        String  @id @default(cuid())
+  name      String  @unique
+  parentId  String?
+  parent    Category? @relation("CategoryTree", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryTree")
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+  products  Product[]
+}
+
+model Collection {
+  id       String @id @default(cuid())
+  name     String @unique
+  products Product[]
+}
+
+model StoneType {
+  id       String  @id @default(cuid())
+  name     String  @unique // Diamond, Ruby, CZ, ...
+  isPrecious Boolean @default(false)
+  defaultUnit StoneUnit @default(CARAT)
+  defaultMethod StoneRateMethod @default(PER_CARAT)
+  isActive Boolean @default(true)
+}
+
+model Location {
+  id       String  @id @default(cuid())
+  name     String  @unique
+  type     String  @default("OFFICE") // OFFICE, BRANCH, GODOWN, SHOWROOM
+  address  String?
+  isDefault Boolean @default(false)
+  isActive Boolean @default(true)
+  items    Product[]
+  movements StockMovement[]
+  transfersOut StockTransfer[] @relation("TransferFrom")
+  transfersIn  StockTransfer[] @relation("TransferTo")
+}
+
+model PriceGroup {
+  id        String  @id @default(cuid())
+  name      String  @unique
+  notes     String?
+  customers Customer[]
+}
+
+// ───────────────────────── Parties ─────────────────────────
+model Customer {
+  id            String  @id @default(cuid())
+  code          String  @unique
+  businessName  String
+  contactPerson String?
+  phone         String?
+  whatsapp      String?
+  email         String?
+  gstin         String?
+  pan           String?
+  billingAddress  String?
+  shippingAddress String?
+  city          String?
+  state         String?
+  stateCode     String?
+  creditLimit   Decimal @default(0) @db.Decimal(16, 2)
+  creditDays    Int     @default(0)
+  defaultBillingMode BillingMode @default(MONEY)
+  priceGroupId  String?
+  priceGroup    PriceGroup? @relation(fields: [priceGroupId], references: [id])
+
+  // customer-specific pricing profile (auto-loaded in sale)
+  defaultMakingType MakingType @default(PER_GRAM)
+  defaultMakingRate Decimal @default(0) @db.Decimal(16, 4)
+  defaultGoldMargin Decimal @default(0) @db.Decimal(16, 4) // ₹/g added over market rate
+  defaultWastagePct Decimal @default(0) @db.Decimal(7, 3)
+  defaultDiscountPct Decimal @default(0) @db.Decimal(7, 3)
+  defaultStoneRate  Decimal @default(0) @db.Decimal(16, 4)
+  defaultDiamondRate Decimal @default(0) @db.Decimal(16, 4)
+  defaultStonePricing StoneRateMethod @default(PER_CARAT)
+
+  openingCash   Decimal @default(0) @db.Decimal(16, 2) // +ve = customer owes us (Dr)
+  openingFine   Decimal @default(0) @db.Decimal(14, 4) // +ve = customer owes fine gold (Dr)
+  status        PartyStatus @default(ACTIVE)
+  notes         String?
+  isDeleted     Boolean @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sales         Sale[]
+  metalLedger   CustomerMetalLedger[]
+  moneyLedger   CustomerMoneyLedger[]
+  goldReceipts  GoldReceipt[]
+  cashReceipts  CashReceipt[]
+  rateFixings   RateFixing[]
+  approvals     ApprovalMemo[]
+  salesReturns  SalesReturn[]
+
+  @@index([businessName])
+  @@index([phone])
+  @@index([gstin])
+  @@index([status])
+}
+
+model Supplier {
+  id           String  @id @default(cuid())
+  code         String  @unique
+  companyName  String
+  contactPerson String?
+  phone        String?
+  email        String?
+  gstin        String?
+  pan          String?
+  address      String?
+  city         String?
+  state        String?
+  stateCode    String?
+  defaultPurityId String?
+  paymentTerms String?
+  openingFine  Decimal @default(0) @db.Decimal(14, 4) // +ve = we owe supplier gold (Cr)
+  openingMoney Decimal @default(0) @db.Decimal(16, 2) // +ve = we owe supplier money (Cr)
+  status       PartyStatus @default(ACTIVE)
+  notes        String?
+  isDeleted    Boolean @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  purchases    Purchase[]
+  products     Product[]
+  metalLedger  SupplierMetalLedger[]
+  moneyLedger  SupplierMoneyLedger[]
+
+  @@index([companyName])
+  @@index([phone])
+  @@index([gstin])
+}
+
+// ───────────────────────── Inventory ─────────────────────────
+model Lot {
+  id          String  @id @default(cuid())
+  lotNumber   String  @unique
+  categoryId  String?
+  description String?
+  purityId    String?
+  supplierId  String?
+  locationId  String?
+  // original
+  pieces      Int
+  grossWeight Decimal @db.Decimal(14, 3)
+  stoneWeight Decimal @default(0) @db.Decimal(14, 3)
+  netWeight   Decimal @db.Decimal(14, 3)
+  fineWeight  Decimal @db.Decimal(14, 4)
+  // remaining
+  remainingPieces Int
+  remainingGross  Decimal @db.Decimal(14, 3)
+  remainingNet    Decimal @db.Decimal(14, 3)
+  remainingFine   Decimal @db.Decimal(14, 4)
+  status      ItemStatus @default(AVAILABLE)
+  createdAt   DateTime @default(now())
+  products    Product[]
+
+  @@index([status])
+}
+
+/// A single jewellery item / tag (or a lot-less batch of identical pieces).
+model Product {
+  id          String  @id @default(cuid())
+  itemCode    String  @unique // Item ID / tag no.
+  designNo    String
+  barcode     String? @unique
+  qrCode      String?
+  name        String?
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id])
+  subcategory String?
+  collectionId String?
+  collection  Collection? @relation(fields: [collectionId], references: [id])
+  metalId     String
+  metal       Metal   @relation(fields: [metalId], references: [id])
+  purityId    String
+  purity      Purity  @relation(fields: [purityId], references: [id])
+  /// touch snapshot at the time of creation (so purity master edits don't change old stock)
+  touch       Decimal @db.Decimal(7, 3)
+
+  pieces      Int     @default(1)
+  grossWeight Decimal @db.Decimal(14, 3)
+  stoneWeight Decimal @default(0) @db.Decimal(14, 4)
+  otherWeight Decimal @default(0) @db.Decimal(14, 3)
+  netWeight   Decimal @db.Decimal(14, 3)
+  fineWeight  Decimal @db.Decimal(14, 4)
+  netWeightOverridden Boolean @default(false)
+
+  huid        String? @unique
+  supplierId  String?
+  supplier    Supplier? @relation(fields: [supplierId], references: [id])
+  purchaseRate  Decimal @default(0) @db.Decimal(16, 4)
+  purchaseMaking Decimal @default(0) @db.Decimal(16, 2)
+  purchaseStoneCost Decimal @default(0) @db.Decimal(16, 2)
+  purchaseCost  Decimal @default(0) @db.Decimal(16, 2) // total cost, for profit (permissioned)
+
+  // default selling hints
+  makingType  MakingType @default(PER_GRAM)
+  makingCharge Decimal @default(0) @db.Decimal(16, 4)
+
+  locationId  String?
+  location    Location? @relation(fields: [locationId], references: [id])
+  lotId       String?
+  lot         Lot?    @relation(fields: [lotId], references: [id])
+  status      ItemStatus @default(AVAILABLE)
+  imageUrl    String?
+  notes       String?
+  isDeleted   Boolean @default(false)
+  purchaseDate DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  stones      ProductStone[]
+  movements   StockMovement[]
+  saleItems   SaleItem[]
+  approvalItems ApprovalItem[]
+
+  @@index([designNo])
+  @@index([status])
+  @@index([categoryId])
+  @@index([purityId])
+  @@index([supplierId])
+  @@index([lotId])
+  @@index([locationId])
+  @@index([createdAt])
+  @@index([grossWeight])
+}
+
+model ProductStone {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  stoneTypeId String?
+  stoneName String
+  shape     String?
+  size      String?
+  color     String?
+  quality   String?
+  pieces    Int     @default(1)
+  weight    Decimal @db.Decimal(14, 4)
+  unit      StoneUnit @default(CARAT)
+  weightGram Decimal @db.Decimal(14, 4) // converted with the conversion in force at save time
+  method    StoneRateMethod @default(PER_CARAT)
+  rate      Decimal @default(0) @db.Decimal(16, 4)
+  amount    Decimal @default(0) @db.Decimal(16, 2)
+  deductFromGross Boolean @default(true)
+
+  @@index([productId])
+}
+
+/// Append-only inventory movement ledger
+model StockMovement {
+  id        String   @id @default(cuid())
+  date      DateTime @default(now())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  txnType   StockTxnType
+  docType   DocType?
+  docId     String?
+  reference String?
+  piecesIn  Int      @default(0)
+  piecesOut Int      @default(0)
+  grossIn   Decimal  @default(0) @db.Decimal(14, 3)
+  grossOut  Decimal  @default(0) @db.Decimal(14, 3)
+  netIn     Decimal  @default(0) @db.Decimal(14, 3)
+  netOut    Decimal  @default(0) @db.Decimal(14, 3)
+  fineIn    Decimal  @default(0) @db.Decimal(14, 4)
+  fineOut   Decimal  @default(0) @db.Decimal(14, 4)
+  locationId String?
+  location  Location? @relation(fields: [locationId], references: [id])
+  reversesId String?
+  userId    String?
+  notes     String?
+
+  @@index([productId, date])
+  @@index([docType, docId])
+  @@index([txnType])
+  @@index([date])
+}
+
+model StockAdjustment {
+  id        String   @id @default(cuid())
+  number    String   @unique
+  date      DateTime @default(now())
+  productId String
+  reason    AdjustmentReason
+  // before / after / difference (all measures)
+  beforePieces Int
+  afterPieces  Int
+  beforeGross  Decimal @db.Decimal(14, 3)
+  afterGross   Decimal @db.Decimal(14, 3)
+  beforeNet    Decimal @db.Decimal(14, 3)
+  afterNet     Decimal @db.Decimal(14, 3)
+  beforeFine   Decimal @db.Decimal(14, 4)
+  afterFine    Decimal @db.Decimal(14, 4)
+  diffFine     Decimal @db.Decimal(14, 4)
+  status    DocStatus @default(ACTIVE)
+  userId    String?
+  notes     String?
+
+  @@index([productId])
+  @@index([date])
+}
+
+model StockTransfer {
+  id         String  @id @default(cuid())
+  number     String  @unique
+  fromId     String
+  from       Location @relation("TransferFrom", fields: [fromId], references: [id])
+  toId       String
+  to         Location @relation("TransferTo", fields: [toId], references: [id])
+  status     TransferStatus @default(DRAFT)
+  createdAt  DateTime @default(now())
+  sentAt     DateTime?
+  receivedAt DateTime?
+  senderId   String?
+  receiverId String?
+  notes      String?
+  items      StockTransferItem[]
+}
+
+model StockTransferItem {
+  id         String @id @default(cuid())
+  transferId String
+  transfer   StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  productId  String
+  pieces     Int
+  grossWeight Decimal @db.Decimal(14, 3)
+  netWeight  Decimal @db.Decimal(14, 3)
+  fineWeight Decimal @db.Decimal(14, 4)
+}
+
+// ───────────────────────── Sales ─────────────────────────
+model Sale {
+  id           String  @id @default(cuid())
+  number       String  @unique
+  date         DateTime @db.Date
+  dueDate      DateTime? @db.Date
+  customerId   String
+  customer     Customer @relation(fields: [customerId], references: [id])
+  billingMode  BillingMode
+  status       DocStatus @default(ACTIVE)
+  placeOfSupplyState String?
+  placeOfSupplyCode  String?
+  isInterState Boolean @default(false)
+  gstRate      Decimal @default(3) @db.Decimal(6, 3)
+  hsn          String? 
+
+  // totals — everything stored, nothing derived at render time
+  totalPieces   Int
+  grossWeight   Decimal @db.Decimal(14, 3)
+  stoneWeight   Decimal @db.Decimal(14, 4)
+  otherWeight   Decimal @db.Decimal(14, 3)
+  netWeight     Decimal @db.Decimal(14, 3)
+  fineWeight    Decimal @db.Decimal(14, 4)
+  goldValue     Decimal @db.Decimal(16, 2) // notional metal value
+  billedGoldValue Decimal @db.Decimal(16, 2) // goldValue billed in money (0 in METAL mode)
+  makingAmount  Decimal @db.Decimal(16, 2)
+  stoneAmount   Decimal @db.Decimal(16, 2)
+  otherCharges  Decimal @db.Decimal(16, 2)
+  discount      Decimal @db.Decimal(16, 2)
+  taxableAmount Decimal @db.Decimal(16, 2)
+  cgst          Decimal @db.Decimal(16, 2)
+  sgst          Decimal @db.Decimal(16, 2)
+  igst          Decimal @db.Decimal(16, 2)
+  gstAmount     Decimal @db.Decimal(16, 2)
+  roundOff      Decimal @default(0) @db.Decimal(16, 2)
+  grandTotal    Decimal @db.Decimal(16, 2)
+  /// ledger impact snapshots
+  metalLedgerImpact Decimal @db.Decimal(14, 4)
+  moneyLedgerImpact Decimal @db.Decimal(16, 2)
+  /// profit snapshot (visible only with profit.view)
+  costTotal     Decimal @default(0) @db.Decimal(16, 2)
+  profitGold    Decimal @default(0) @db.Decimal(16, 2)
+  profitMaking  Decimal @default(0) @db.Decimal(16, 2)
+  profitStone   Decimal @default(0) @db.Decimal(16, 2)
+
+  notes        String?
+  terms        String?
+  approvalId   String?
+  approval     ApprovalMemo? @relation(fields: [approvalId], references: [id])
+
+  createdById  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  cancelledById String?
+  cancelledAt   DateTime?
+  cancelReason  String?
+
+  items        SaleItem[]
+  taxEntries   TaxEntry[]
+  returns      SalesReturn[]
+
+  @@index([customerId, date])
+  @@index([date])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model SaleItem {
+  id        String  @id @default(cuid())
+  saleId    String
+  sale      Sale    @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  lineNo    Int
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+  lotId     String?
+  description String
+  designNo  String?
+  hsn       String?
+  pieces    Int
+  grossWeight Decimal @db.Decimal(14, 3)
+  stoneWeight Decimal @default(0) @db.Decimal(14, 4)
+  otherWeight Decimal @default(0) @db.Decimal(14, 3)
+  netWeight   Decimal @db.Decimal(14, 3)
+  netOverridden Boolean @default(false)
+  touch       Decimal @db.Decimal(7, 3)
+  fineWeight  Decimal @db.Decimal(14, 4)
+  goldRate    Decimal @db.Decimal(16, 4)
+  goldValue   Decimal @db.Decimal(16, 2)
+  makingType  MakingType
+  makingRate  Decimal @db.Decimal(16, 4)
+  makingAmount Decimal @db.Decimal(16, 2)
+  stoneAmount Decimal @default(0) @db.Decimal(16, 2)
+  otherCharges Decimal @default(0) @db.Decimal(16, 2)
+  discount    Decimal @default(0) @db.Decimal(16, 2)
+  taxableAmount Decimal @db.Decimal(16, 2)
+  gstAmount   Decimal @db.Decimal(16, 2)
+  lineTotal   Decimal @db.Decimal(16, 2)
+  costAmount  Decimal @default(0) @db.Decimal(16, 2)
+  returnedPieces Int  @default(0)
+  stones      SaleItemStone[]
+
+  @@index([saleId])
+  @@index([productId])
+}
+
+model SaleItemStone {
+  id         String @id @default(cuid())
+  saleItemId String
+  saleItem   SaleItem @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
+  stoneName  String
+  pieces     Int
+  weight     Decimal @db.Decimal(14, 4)
+  unit       StoneUnit
+  weightGram Decimal @db.Decimal(14, 4)
+  method     StoneRateMethod
+  rate       Decimal @db.Decimal(16, 4)
+  amount     Decimal @db.Decimal(16, 2)
+}
+
+model TaxEntry {
+  id        String  @id @default(cuid())
+  docType   DocType
+  docId     String
+  saleId    String?
+  sale      Sale?   @relation(fields: [saleId], references: [id])
+  date      DateTime @db.Date
+  hsn       String?
+  partyGstin String?
+  taxable   Decimal @db.Decimal(16, 2)
+  cgstRate  Decimal @db.Decimal(6, 3)
+  sgstRate  Decimal @db.Decimal(6, 3)
+  igstRate  Decimal @db.Decimal(6, 3)
+  cgst      Decimal @db.Decimal(16, 2)
+  sgst      Decimal @db.Decimal(16, 2)
+  igst      Decimal @db.Decimal(16, 2)
+  total     Decimal @db.Decimal(16, 2)
+  reversesId String?
+
+  @@index([docType, docId])
+  @@index([date])
+}
+
+// ───────────────────────── Ledgers (append-only) ─────────────────────────
+// Customer perspective: Debit ↑ customer owes us, Credit ↓.
+model CustomerMetalLedger {
+  id         String  @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  date       DateTime @default(now())
+  txnType    MetalTxnType
+  docType    DocType?
+  docId      String?
+  reference  String?
+  debitFine  Decimal @default(0) @db.Decimal(14, 4)
+  creditFine Decimal @default(0) @db.Decimal(14, 4)
+  /// physical weight & touch retained for gold receipts (traceability)
+  physicalWeight Decimal? @db.Decimal(14, 3)
+  touch      Decimal? @db.Decimal(7, 3)
+  remarks    String?
+  status     DocStatus @default(ACTIVE)
+  reversesId String?
+  userId     String?
+  createdAt  DateTime @default(now())
+
+  @@index([customerId, date])
+  @@index([docType, docId])
+}
+
+model CustomerMoneyLedger {
+  id         String  @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  date       DateTime @default(now())
+  txnType    MoneyTxnType
+  docType    DocType?
+  docId      String?
+  reference  String?
+  debit      Decimal @default(0) @db.Decimal(16, 2)
+  credit     Decimal @default(0) @db.Decimal(16, 2)
+  paymentMode PaymentMode?
+  remarks    String?
+  status     DocStatus @default(ACTIVE)
+  reversesId String?
+  userId     String?
+  createdAt  DateTime @default(now())
+
+  @@index([customerId, date])
+  @@index([docType, docId])
+}
+
+// Supplier perspective: Credit ↑ we owe supplier, Debit ↓.
+model SupplierMetalLedger {
+  id         String  @id @default(cuid())
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  date       DateTime @default(now())
+  txnType    MetalTxnType
+  docType    DocType?
+  docId      String?
+  reference  String?
+  debitFine  Decimal @default(0) @db.Decimal(14, 4)
+  creditFine Decimal @default(0) @db.Decimal(14, 4)
+  remarks    String?
+  status     DocStatus @default(ACTIVE)
+  reversesId String?
+  userId     String?
+
+  @@index([supplierId, date])
+}
+
+model SupplierMoneyLedger {
+  id         String  @id @default(cuid())
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  date       DateTime @default(now())
+  txnType    MoneyTxnType
+  docType    DocType?
+  docId      String?
+  reference  String?
+  debit      Decimal @default(0) @db.Decimal(16, 2)
+  credit     Decimal @default(0) @db.Decimal(16, 2)
+  paymentMode PaymentMode?
+  remarks    String?
+  status     DocStatus @default(ACTIVE)
+  reversesId String?
+  userId     String?
+
+  @@index([supplierId, date])
+}
+
+// ───────────────────────── Receipts & rate fixing ─────────────────────────
+model GoldReceipt {
+  id         String  @id @default(cuid())
+  number     String  @unique
+  date       DateTime @db.Date
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  physicalWeight Decimal @db.Decimal(14, 3)
+  touch      Decimal @db.Decimal(7, 3)
+  fineWeight Decimal @db.Decimal(14, 4)
+  reference  String?
+  remarks    String?
+  status     DocStatus @default(ACTIVE)
+  createdById String?
+  createdAt  DateTime @default(now())
+  cancelledById String?
+  cancelledAt DateTime?
+  cancelReason String?
+
+  @@index([customerId, date])
+}
+
+model CashReceipt {
+  id         String  @id @default(cuid())
+  number     String  @unique
+  date       DateTime @db.Date
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  amount     Decimal @db.Decimal(16, 2)
+  paymentMode PaymentMode
+  referenceNo String?
+  bank       String?
+  remarks    String?
+  status     DocStatus @default(ACTIVE)
+  createdById String?
+  createdAt  DateTime @default(now())
+  cancelledById String?
+  cancelledAt DateTime?
+  cancelReason String?
+
+  @@index([customerId, date])
+}
+
+model RateFixing {
+  id         String  @id @default(cuid())
+  number     String  @unique
+  date       DateTime @db.Date
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  fineWeight Decimal @db.Decimal(14, 4)
+  rate       Decimal @db.Decimal(16, 4)
+  amount     Decimal @db.Decimal(16, 2)
+  reference  String?
+  notes      String?
+  status     DocStatus @default(ACTIVE)
+  createdById String?
+  createdAt  DateTime @default(now())
+  cancelledById String?
+  cancelledAt DateTime?
+  cancelReason String?
+
+  @@index([customerId, date])
+}
+
+// ───────────────────────── Approval / memo ─────────────────────────
+model ApprovalMemo {
+  id         String  @id @default(cuid())
+  number     String  @unique
+  date       DateTime @db.Date
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  expectedReturn DateTime? @db.Date
+  status     ApprovalStatus @default(OPEN)
+  remarks    String?
+  createdById String?
+  createdAt  DateTime @default(now())
+  items      ApprovalItem[]
+  sales      Sale[]
+
+  @@index([customerId])
+  @@index([status])
+}
+
+model ApprovalItem {
+  id         String  @id @default(cuid())
+  memoId     String
+  memo       ApprovalMemo @relation(fields: [memoId], references: [id])
+  productId  String
+  product    Product @relation(fields: [productId], references: [id])
+  pieces     Int
+  grossWeight Decimal @db.Decimal(14, 3)
+  netWeight  Decimal @db.Decimal(14, 3)
+  fineWeight Decimal @db.Decimal(14, 4)
+  returnedPieces Int @default(0)
+  soldPieces Int     @default(0)
+
+  @@index([memoId])
+  @@index([productId])
+}
+
+// ───────────────────────── Returns ─────────────────────────
+model SalesReturn {
+  id         String  @id @default(cuid())
+  number     String  @unique
+  date       DateTime @db.Date
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  saleId     String? // null → unlinked return
+  sale       Sale?   @relation(fields: [saleId], references: [id])
+  status     DocStatus @default(ACTIVE)
+  fineWeight Decimal @db.Decimal(14, 4)
+  netWeight  Decimal @db.Decimal(14, 3)
+  taxable    Decimal @db.Decimal(16, 2)
+  gstAmount  Decimal @db.Decimal(16, 2)
+  total      Decimal @db.Decimal(16, 2)
+  reason     String?
+  createdById String?
+  createdAt  DateTime @default(now())
+  items      SalesReturnItem[]
+
+  @@index([customerId, date])
+}
+
+model SalesReturnItem {
+  id         String @id @default(cuid())
+  returnId   String
+  return     SalesReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  saleItemId String?
+  productId  String?
+  pieces     Int
+  grossWeight Decimal @db.Decimal(14, 3)
+  netWeight  Decimal @db.Decimal(14, 3)
+  fineWeight Decimal @db.Decimal(14, 4)
+  taxable    Decimal @db.Decimal(16, 2)
+  gstAmount  Decimal @db.Decimal(16, 2)
+}
+
+// ───────────────────────── Purchases ─────────────────────────
+model Purchase {
+  id          String  @id @default(cuid())
+  number      String  @unique
+  supplierInvoiceNo String?
+  date        DateTime @db.Date
+  supplierId  String
+  supplier    Supplier @relation(fields: [supplierId], references: [id])
+  status      DocStatus @default(ACTIVE)
+  totalPieces Int
+  grossWeight Decimal @db.Decimal(14, 3)
+  stoneWeight Decimal @db.Decimal(14, 4)
+  netWeight   Decimal @db.Decimal(14, 3)
+  fineWeight  Decimal @db.Decimal(14, 4)
+  goldValue   Decimal @db.Decimal(16, 2)
+  makingAmount Decimal @db.Decimal(16, 2)
+  stoneAmount Decimal @db.Decimal(16, 2)
+  otherCharges Decimal @db.Decimal(16, 2)
+  taxableAmount Decimal @db.Decimal(16, 2)
+  gstAmount   Decimal @db.Decimal(16, 2)
+  grandTotal  Decimal @db.Decimal(16, 2)
+  billingMode BillingMode @default(MONEY)
+  notes       String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  cancelledAt DateTime?
+  cancelReason String?
+  items       PurchaseItem[]
+
+  @@index([supplierId, date])
+}
+
+model PurchaseItem {
+  id          String @id @default(cuid())
+  purchaseId  String
+  purchase    Purchase @relation(fields: [purchaseId], references: [id])
+  productId   String?
+  designNo    String?
+  description String
+  pieces      Int
+  grossWeight Decimal @db.Decimal(14, 3)
+  stoneWeight Decimal @db.Decimal(14, 4)
+  otherWeight Decimal @db.Decimal(14, 3)
+  netWeight   Decimal @db.Decimal(14, 3)
+  touch       Decimal @db.Decimal(7, 3)
+  fineWeight  Decimal @db.Decimal(14, 4)
+  rate        Decimal @db.Decimal(16, 4)
+  goldValue   Decimal @db.Decimal(16, 2)
+  makingAmount Decimal @db.Decimal(16, 2)
+  stoneCost   Decimal @db.Decimal(16, 2)
+  otherCost   Decimal @db.Decimal(16, 2)
+  gstAmount   Decimal @db.Decimal(16, 2)
+  amount      Decimal @db.Decimal(16, 2)
+}
+
+// ───────────────────────── Config / productivity ─────────────────────────
+model InvoiceTemplate {
+  id          String  @id @default(cuid())
+  name        String
+  orientation String  @default("PORTRAIT")
+  isDefault   Boolean @default(false)
+  /// { columns: { gross:true, stone:true, fine:true, goldRate:false, ... }, footer: {...} }
+  config      Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model SavedView {
+  id        String  @id @default(cuid())
+  userId    String
+  table     String // "jewellery-stock"
+  name      String
+  config    Json // visible columns, sort, filters
+  isDefault Boolean @default(false)
+
+  @@index([userId, table])
+}
+
+model ImportBatch {
+  id        String  @id @default(cuid())
+  kind      String
+  fileName  String
+  totalRows Int
+  okRows    Int
+  errorRows Int
+  status    String // PREVIEW, COMMITTED, REJECTED
+  errors    Json?
+  userId    String?
+  createdAt DateTime @default(now())
+}

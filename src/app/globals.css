@@ -1,0 +1,241 @@
+@import "tailwindcss";
+
+/* ───────── Design tokens: ~90% neutral, one emerald accent ───────── */
+:root {
+  --bg: #fafaf8;
+  --surface: #ffffff;
+  --subtle: #f3f3f0;
+  --border: #e6e6e1;
+  --border-strong: #d4d4cd;
+  --text: #1c1c1a;
+  --muted: #6b6b66;
+  --faint: #9a9a93;
+  --accent: #14532d;
+  --accent-hover: #0f4423;
+  --accent-soft: #ecf4ee;
+  --danger: #b42318;
+  --danger-soft: #fdf0ee;
+  --warn: #92600a;
+  --warn-soft: #fdf5e4;
+  --info: #3b5b86;
+  --info-soft: #eef3f9;
+  --radius: 8px;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-subtle: var(--subtle);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-ink: var(--text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+}
+
+html {
+  font-size: 15px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-inter), system-ui, sans-serif;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Numbers must be easy to read and align */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum", "zero";
+  letter-spacing: -0.01em;
+}
+
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: #cfe5d5;
+}
+
+/* Scrollbars — quiet */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* ───────── Components ───────── */
+.field {
+  height: 44px;
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 0 12px;
+  font-size: 14px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.field.compact {
+  height: 36px;
+  font-size: 13px;
+}
+.field::placeholder {
+  color: var(--faint);
+}
+.field:hover {
+  border-color: #b9b9b1;
+}
+.field:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(20, 83, 45, 0.12);
+}
+.field:disabled {
+  background: var(--subtle);
+  color: var(--muted);
+}
+textarea.field {
+  height: auto;
+  padding: 10px 12px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+.btn:hover {
+  background: var(--subtle);
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+.btn-danger {
+  color: var(--danger);
+  border-color: #f0c9c4;
+  background: var(--danger-soft);
+}
+.btn-danger:hover {
+  background: #fbe3df;
+}
+.btn-ghost {
+  border-color: transparent;
+  background: transparent;
+}
+.btn-sm {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--subtle);
+  color: var(--muted);
+}
+.badge-green { background: var(--accent-soft); color: var(--accent); }
+.badge-red { background: var(--danger-soft); color: var(--danger); }
+.badge-amber { background: var(--warn-soft); color: var(--warn); }
+.badge-blue { background: var(--info-soft); color: var(--info); }
+
+/* Data tables */
+.dt {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13.5px;
+}
+.dt thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  text-align: left;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+.dt tbody td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.dt tbody tr:hover td {
+  background: #fbfbf9;
+}
+.dt .r {
+  text-align: right;
+}
+
+kbd {
+  font-family: inherit;
+  font-size: 11px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--muted);
+  background: var(--surface);
+}
+
+@media print {
+  .no-print { display: none !important; }
+}
