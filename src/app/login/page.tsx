@@ -15,9 +15,16 @@ export default function LoginPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true); setError("");
-    const { error } = await authClient.signIn.email({ email, password });
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPassword = password.trim();
+    const { error } = await authClient.signIn.email({ email: cleanEmail, password: cleanPassword });
     if (error) {
-      setError(error.status === 429 ? "Too many attempts. Please wait a minute and try again." : "Incorrect email or password.");
+      console.error("Sign-in failed:", error);
+      setError(
+        error.status === 429
+          ? "Too many attempts. Please wait a minute and try again."
+          : (error.message || "Incorrect email or password.")
+      );
       setBusy(false);
       return;
     }
